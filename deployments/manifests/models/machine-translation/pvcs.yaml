@@ -1,0 +1,149 @@
+# ==============================================================================
+# Persistent Volume Claims for Machine Translation Models
+# ==============================================================================
+# Storage for model caches to avoid re-downloading models on pod restart
+# ==============================================================================
+
+---
+# LID FastText Model Cache
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lid-fasttext-model-cache
+  namespace: ml-inference
+  labels:
+    app: lid-fasttext
+    app.kubernetes.io/part-of: ml-inference-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ml-inference-ssd
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+# Qwen-MT-7B Model Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qwen-mt-7b-model-storage
+  namespace: ml-inference
+  labels:
+    app: qwen-mt-7b
+    app.kubernetes.io/part-of: ml-inference-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ml-inference-ssd
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# NLLB-200-3.3B Model Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nllb-200-3b-model-storage
+  namespace: ml-inference
+  labels:
+    app: nllb-200-3b
+    app.kubernetes.io/part-of: ml-inference-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ml-inference-ssd
+  resources:
+    requests:
+      storage: 30Gi
+
+---
+# Llama-3.1-8B-Instruct Model Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: llama-3-8b-instruct-model-storage
+  namespace: ml-inference
+  labels:
+    app: llama-3-8b-instruct
+    app.kubernetes.io/part-of: ml-inference-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ml-inference-ssd
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# Mistral-Nemo-12B Model Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mistral-nemo-12b-model-storage
+  namespace: ml-inference
+  labels:
+    app: mistral-nemo-12b
+    app.kubernetes.io/part-of: ml-inference-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ml-inference-ssd
+  resources:
+    requests:
+      storage: 80Gi
+
+---
+# Gemma-X2-28-9B Model Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gemma-x2-28-9b-model-storage
+  namespace: ml-inference
+  labels:
+    app: gemma-x2-28-9b
+    app.kubernetes.io/part-of: ml-inference-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ml-inference-ssd
+  resources:
+    requests:
+      storage: 60Gi
+
+---
+# Qwen2-1.5B-Instruct Model Storage (Fast model)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qwen2-1-5b-instruct-model-storage
+  namespace: ml-inference
+  labels:
+    app: qwen2-1-5b-instruct
+    app.kubernetes.io/part-of: ml-inference-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ml-inference-ssd
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# NLLB-200-distilled-1.3B Model Storage (Technical model)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nllb-200-distilled-1b-model-storage
+  namespace: ml-inference
+  labels:
+    app: nllb-200-distilled-1b
+    app.kubernetes.io/part-of: ml-inference-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ml-inference-ssd
+  resources:
+    requests:
+      storage: 10Gi

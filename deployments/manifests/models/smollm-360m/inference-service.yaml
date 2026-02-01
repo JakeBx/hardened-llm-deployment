@@ -1,0 +1,114 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: smollm-360m
+  namespace: ml-inference
+  labels:
+    app: smollm-360m
+    app.kubernetes.io/part-of: ml-inference-platform
+  annotations:
+    # Model classification for ABAC authorization
+    security.ml-inference.io/model-classification: "INTERNAL"
+    # Audit trail
+    security.ml-inference.io/data-handling: "standard"
+    # Enable streaming support
+    serving.kserve.io/enable-streaming: "true"
+spec:
+  # Auth Transformer - handles ABAC, classification aggregation, audit logging, streaming
+  transformer:
+    containers:
+      - name: auth-transformer
+        image: auth-transformer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        env:
+          - name: MODEL_CLASSIFICATION
+            value: "INTERNAL"
+          - name: PREDICTOR_HOST
+            value: "localhost:8000"  # vLLM default port
+        envFrom:
+          - configMapRef:
+              name: external-services-config
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+  
+  # Predictor - vLLM for SmolLM with OpenAI-compatible streaming API
+  # This small model can run on CPU or a single small GPU
+  predictor:
+    containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args:
+          # Model configuration - 4-bit quantized model
+          - "--model=unsloth/SmolLM-360M-bnb-4bit"
+          - "--served-model-name=smollm-360m"
+          # Small model - no tensor parallelism
+          - "--tensor-parallel-size=1"
+          # Shorter context for efficiency
+          - "--max-model-len=2048"
+          # Enable trust for remote code
+          - "--trust-remote-code"
+          # Quantization configuration
+          - "--quantization=bitsandbytes"
+          - "--load-format=bitsandbytes"
+          # API server configuration
+          - "--host=0.0.0.0"
+          - "--port=8000"
+          # Performance tuning for small model
+          - "--disable-log-requests"
+          - "--gpu-memory-utilization=0.8"
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: huggingface-credentials
+                key: token
+                optional: true
+        resources:
+          # SmolLM-360M-bnb-4bit is very lightweight
+          # Configured for single GPU, can also work on CPU-only
+          requests:
+            cpu: "1"
+            memory: "4Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "2"
+            memory: "8Gi"
+            nvidia.com/gpu: "1"
+        volumeMounts:
+          - name: model-storage
+            mountPath: /root/.cache/huggingface
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: smollm-360m-model-storage
+    
+    # Autoscaling configuration
+    minReplicas: 1
+    maxReplicas: 5
+    scaleTarget: 5
+    scaleMetric: concurrency

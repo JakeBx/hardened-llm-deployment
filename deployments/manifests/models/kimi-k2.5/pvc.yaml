@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kimi-k2-5-model-storage
+  namespace: ml-inference
+  labels:
+    app: kimi-k2-5
+    app.kubernetes.io/part-of: ml-inference-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      # Kimi K2.5 is a large VLM - requires significant storage
+      # Adjust based on actual model size after quantization
+      storage: 500Gi

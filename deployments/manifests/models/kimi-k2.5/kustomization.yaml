@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ml-inference
+
+resources:
+  - pvc.yaml
+  - inference-service.yaml
+
+commonLabels:
+  app: kimi-k2-5
+  model-type: vlm
+  app.kubernetes.io/part-of: ml-inference-platform

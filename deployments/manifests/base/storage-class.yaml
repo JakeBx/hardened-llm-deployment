@@ -1,0 +1,13 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-ssd
+  labels:
+    app.kubernetes.io/part-of: ml-inference-platform
+provisioner: kubernetes.io/no-provisioner  # Change to your cloud provider's SSD provisioner
+# For GKE: kubernetes.io/gce-pd with parameters: type: pd-ssd
+# For EKS: kubernetes.io/aws-ebs with parameters: type: gp3
+# For AKS: kubernetes.io/azure-disk with parameters: storageaccounttype: Premium_LRS
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain

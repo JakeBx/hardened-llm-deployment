@@ -1,0 +1,209 @@
+# =============================================================================
+# Full Stack Local Testing for SmolLM-360M (Option 3)
+# =============================================================================
+#
+# This docker-compose file sets up the complete auth transformer + vLLM stack
+# for local testing, including external service stubs for ABAC, Classification,
+# Audit, and Observability services.
+#
+# Architecture:
+#   Client -> Auth Transformer (8080) -> vLLM (8000)
+#                    |
+#                    +-> External Stubs (8081) [ABAC, Classification, Audit, Observability]
+#
+# Usage:
+#   cd deployments
+#   docker compose -f docker-compose.local.yaml build
+#   docker compose -f docker-compose.local.yaml up -d
+#   docker compose -f docker-compose.local.yaml logs -f
+#
+# Test:
+#   curl http://localhost:8080/health  # Auth transformer
+#   curl http://localhost:8000/health  # vLLM direct
+#   curl http://localhost:8081/health  # External stubs
+#
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # External Service Stubs (ABAC, Classification, Audit, Observability)
+  # ===========================================================================
+  # Provides stub implementations for all external services that the auth
+  # transformer depends on. In production, these would be replaced with
+  # actual enterprise services.
+  #
+  # Endpoints:
+  #   - POST /authorize      (ABAC authorization)
+  #   - POST /combine        (Classification combining)
+  #   - POST /audit-events   (Audit logging)
+  #   - GET  /audit-events   (View logged events - debug)
+  #   - POST /metrics        (Observability metrics)
+  #   - GET  /metrics/summary (View metrics - debug)
+  # ===========================================================================
+  external-stubs:
+    build:
+      context: ./external-service-stubs
+      dockerfile: Dockerfile
+    container_name: smollm-external-stubs
+    ports:
+      - "8081:8080"
+    environment:
+      - SERVICE_TYPE=all
+      - PORT=8080
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - smollm-network
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Auth Transformer - Authorization Layer
+  # ===========================================================================
+  # The auth transformer sits in front of vLLM and provides:
+  #   - ABAC authorization via external service
+  #   - Data classification aggregation
+  #   - Audit logging (async, fire-and-forget)
+  #   - Observability metrics (async, fire-and-forget)
+  #   - Streaming support with pre-computed classification headers
+  #
+  # Headers expected from clients:
+  #   - x-client-dn: User's distinguished name (e.g., CN=user,OU=org)
+  #   - x-data-classification: Classification of input data
+  #
+  # Headers added to responses:
+  #   - x-aggregated-classification: Combined classification level
+  #   - x-model-classification: Model's classification level
+  # ===========================================================================
+  auth-transformer:
+    build:
+      context: ./auth-transformer
+      dockerfile: Dockerfile
+    container_name: smollm-auth-transformer
+    ports:
+      - "8080:8080"
+    environment:
+      # Model configuration
+      - MODEL_CLASSIFICATION=INTERNAL
+      
+      # Predictor (vLLM) - use Docker service name and internal port
+      - PREDICTOR_HOST=vllm:8000
+      
+      # External services - all pointing to stubs container
+      - ABAC_SERVICE_URL=http://external-stubs:8080
+      - CLASSIFICATION_SERVICE_URL=http://external-stubs:8080
+      - AUDIT_SERVICE_URL=http://external-stubs:8080
+      - OBSERVABILITY_SERVICE_URL=http://external-stubs:8080
+    depends_on:
+      external-stubs:
+        condition: service_healthy
+      vllm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - smollm-network
+    restart: unless-stopped
+
+  # ===========================================================================
+  # vLLM Inference Server - SmolLM-360M
+  # ===========================================================================
+  # Runs the SmolLM-360M model using vLLM's OpenAI-compatible API.
+  #
+  # CPU Mode (default):
+  #   - Uses HuggingFaceTB/SmolLM-360M (non-quantized)
+  #   - Slower but works on any machine
+  #   - Model loading takes 2-3 minutes
+  #
+  # GPU Mode (commented out):
+  #   - Uses unsloth/SmolLM-360M-bnb-4bit (quantized)
+  #   - Much faster inference
+  #   - Requires NVIDIA GPU with CUDA
+  #
+  # To switch to GPU mode:
+  #   1. Uncomment the 'deploy' section
+  #   2. Remove VLLM_NO_CUDA environment variable
+  #   3. Change command to use quantized model (see comments below)
+  # ===========================================================================
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: smollm-vllm
+    
+    # -------------------------------------------------------------------------
+    # GPU MODE - Uncomment for GPU support
+    # -------------------------------------------------------------------------
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    
+    ports:
+      - "8000:8000"
+    
+    volumes:
+      # Model cache - persists downloaded models between container restarts
+      # Use ${HOME} instead of ~ for proper variable expansion
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    
+    environment:
+      # CPU MODE - Remove this line for GPU mode
+      - VLLM_NO_CUDA=1
+      # HuggingFace token (optional, for gated models)
+      # - HF_TOKEN=${HF_TOKEN}
+    
+    # -------------------------------------------------------------------------
+    # CPU MODE (default) - slower but works everywhere
+    # -------------------------------------------------------------------------
+    command: >
+      --model HuggingFaceTB/SmolLM-360M
+      --served-model-name smollm-360m
+      --device cpu
+      --dtype float32
+      --trust-remote-code
+      --max-model-len 1024
+      --host 0.0.0.0
+      --port 8000
+    
+    # -------------------------------------------------------------------------
+    # GPU MODE command - Uncomment and comment CPU mode above
+    # -------------------------------------------------------------------------
+    # command: >
+    #   --model unsloth/SmolLM-360M-bnb-4bit
+    #   --served-model-name smollm-360m
+    #   --quantization bitsandbytes
+    #   --load-format bitsandbytes
+    #   --trust-remote-code
+    #   --max-model-len 2048
+    #   --host 0.0.0.0
+    #   --port 8000
+    
+    healthcheck:
+      # Use Python urllib since curl may not be available in the image
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      # Model loading can take 2-3 minutes on CPU, give it time
+      start_period: 180s
+    
+    networks:
+      - smollm-network
+    restart: unless-stopped
+
+# =============================================================================
+# Network Configuration
+# =============================================================================
+networks:
+  smollm-network:
+    driver: bridge
+    name: smollm-local-network

@@ -1,0 +1,128 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: kimi-k2-5
+  namespace: ml-inference
+  labels:
+    app: kimi-k2-5
+    app.kubernetes.io/part-of: ml-inference-platform
+  annotations:
+    # Model classification for ABAC authorization
+    security.ml-inference.io/model-classification: "CONFIDENTIAL"
+    # Audit trail
+    security.ml-inference.io/data-handling: "standard"
+    # Enable streaming support
+    serving.kserve.io/enable-streaming: "true"
+spec:
+  # Auth Transformer - handles ABAC, classification aggregation, audit logging, streaming
+  transformer:
+    containers:
+      - name: auth-transformer
+        image: auth-transformer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        env:
+          - name: MODEL_CLASSIFICATION
+            value: "CONFIDENTIAL"
+          - name: PREDICTOR_HOST
+            value: "localhost:8000"  # vLLM default port
+        envFrom:
+          - configMapRef:
+              name: external-services-config
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+  
+  # Predictor - vLLM for Kimi K2.5 with OpenAI-compatible streaming API
+  predictor:
+    containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args:
+          # Model configuration
+          - "--model=moonshotai/Kimi-K2.5"
+          - "--served-model-name=kimi-k2-5"
+          # Tensor parallelism for multi-GPU
+          - "--tensor-parallel-size=4"
+          # Context length
+          - "--max-model-len=32768"
+          # Enable trust for remote code
+          - "--trust-remote-code"
+          # API server configuration
+          - "--host=0.0.0.0"
+          - "--port=8000"
+          # Enable streaming (default in vLLM, but explicit)
+          - "--disable-log-requests"
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: huggingface-credentials
+                key: token
+                optional: true
+          # CUDA configuration
+          - name: CUDA_VISIBLE_DEVICES
+            value: "0,1,2,3"
+        resources:
+          requests:
+            cpu: "4"
+            memory: "128Gi"
+            nvidia.com/gpu: "4"
+          limits:
+            cpu: "8"
+            memory: "256Gi"
+            nvidia.com/gpu: "4"
+        volumeMounts:
+          - name: model-storage
+            mountPath: /root/.cache/huggingface
+          - name: shm
+            mountPath: /dev/shm
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 10
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: kimi-k2-5-model-storage
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "16Gi"
+    
+    # Autoscaling configuration
+    minReplicas: 0
+    maxReplicas: 3
+    scaleTarget: 1
+    scaleMetric: concurrency
+
+---
+# HuggingFace credentials secret (placeholder)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: huggingface-credentials
+  namespace: ml-inference
+type: Opaque
+stringData:
+  # Replace with your HuggingFace token for gated models
+  token: "your-huggingface-token-here"

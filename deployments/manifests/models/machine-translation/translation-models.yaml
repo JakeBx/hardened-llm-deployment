@@ -1,0 +1,784 @@
+# ==============================================================================
+# Translation Model InferenceServices
+# ==============================================================================
+# This file contains all the translation model deployments for the
+# Machine Translation InferenceGraph.
+#
+# Models:
+# - Qwen-MT-7B: Chinese/Japanese/Korean specialist
+# - NLLB-200-3.3B: Generalist (200+ languages)
+# - Llama-3.1-8B-Instruct: Spanish, literary content
+# - Mistral-Nemo-12B: French, long documents
+# - Gemma-X2-28-9B: Arabic specialist
+# - Qwen2-1.5B-Instruct: Fast/real-time translation
+# - NLLB-200-distilled-1.3B: Technical documentation
+# ==============================================================================
+
+---
+# ==============================================================================
+# Qwen-MT-7B: Chinese/Japanese/Korean Specialist
+# ==============================================================================
+# Best for: EN-ZH translation, outperforms GPT-4 in fluency
+# GPU: 1x A100 (40GB) or 2x A10
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen-mt-7b
+  namespace: ml-inference
+  labels:
+    app: qwen-mt-7b
+    app.kubernetes.io/part-of: ml-inference-platform
+    app.kubernetes.io/component: translation-model
+    translation.ml-inference.io/specialization: asian
+  annotations:
+    security.ml-inference.io/model-classification: "INTERNAL"
+    serving.kserve.io/enable-streaming: "true"
+    description: "Qwen-MT-7B: Specialized for Chinese, Japanese, Korean translation"
+spec:
+  transformer:
+    containers:
+      - name: auth-transformer
+        image: auth-transformer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        env:
+          - name: MODEL_CLASSIFICATION
+            value: "INTERNAL"
+          - name: PREDICTOR_HOST
+            value: "localhost:8000"
+        envFrom:
+          - configMapRef:
+              name: external-services-config
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
+  predictor:
+    containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args:
+          - "--model=Qwen/Qwen-MT-7B"
+          - "--served-model-name=qwen-mt-7b"
+          - "--tensor-parallel-size=1"
+          - "--max-model-len=8192"
+          - "--trust-remote-code"
+          - "--host=0.0.0.0"
+          - "--port=8000"
+          - "--disable-log-requests"
+          - "--gpu-memory-utilization=0.9"
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: huggingface-credentials
+                key: token
+                optional: true
+        resources:
+          requests:
+            cpu: "2"
+            memory: "32Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "8"
+            memory: "64Gi"
+            nvidia.com/gpu: "1"
+        volumeMounts:
+          - name: model-storage
+            mountPath: /root/.cache/huggingface
+          - name: shm
+            mountPath: /dev/shm
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 180
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 120
+          periodSeconds: 10
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: qwen-mt-7b-model-storage
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "8Gi"
+    minReplicas: 0
+    maxReplicas: 3
+    scaleTarget: 2
+    scaleMetric: concurrency
+
+---
+# ==============================================================================
+# NLLB-200-3.3B: Generalist (200+ languages)
+# ==============================================================================
+# Best for: Russian, Hindi, Bengali, and any low-resource language
+# GPU: 1x A100 (40GB) or 2x A10
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: nllb-200-3b
+  namespace: ml-inference
+  labels:
+    app: nllb-200-3b
+    app.kubernetes.io/part-of: ml-inference-platform
+    app.kubernetes.io/component: translation-model
+    translation.ml-inference.io/specialization: generalist
+  annotations:
+    security.ml-inference.io/model-classification: "INTERNAL"
+    serving.kserve.io/enable-streaming: "true"
+    description: "NLLB-200-3.3B: Generalist for 200+ languages"
+spec:
+  transformer:
+    containers:
+      - name: auth-transformer
+        image: auth-transformer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        env:
+          - name: MODEL_CLASSIFICATION
+            value: "INTERNAL"
+          - name: PREDICTOR_HOST
+            value: "localhost:8000"
+        envFrom:
+          - configMapRef:
+              name: external-services-config
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
+  predictor:
+    containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args:
+          - "--model=facebook/nllb-200-3.3B"
+          - "--served-model-name=nllb-200-3b"
+          - "--tensor-parallel-size=1"
+          - "--max-model-len=4096"
+          - "--trust-remote-code"
+          - "--host=0.0.0.0"
+          - "--port=8000"
+          - "--disable-log-requests"
+          - "--gpu-memory-utilization=0.9"
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: huggingface-credentials
+                key: token
+                optional: true
+        resources:
+          requests:
+            cpu: "2"
+            memory: "32Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "8"
+            memory: "64Gi"
+            nvidia.com/gpu: "1"
+        volumeMounts:
+          - name: model-storage
+            mountPath: /root/.cache/huggingface
+          - name: shm
+            mountPath: /dev/shm
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 180
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 120
+          periodSeconds: 10
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: nllb-200-3b-model-storage
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "8Gi"
+    minReplicas: 1
+    maxReplicas: 5
+    scaleTarget: 3
+    scaleMetric: concurrency
+
+---
+# ==============================================================================
+# Llama-3.1-8B-Instruct: Spanish & Literary Content
+# ==============================================================================
+# Best for: Spanish dialects, formal/informal tone, literary content
+# GPU: 1x A100 (40GB) or 2x A10
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: llama-3-8b-instruct
+  namespace: ml-inference
+  labels:
+    app: llama-3-8b-instruct
+    app.kubernetes.io/part-of: ml-inference-platform
+    app.kubernetes.io/component: translation-model
+    translation.ml-inference.io/specialization: romance
+  annotations:
+    security.ml-inference.io/model-classification: "INTERNAL"
+    serving.kserve.io/enable-streaming: "true"
+    description: "Llama-3.1-8B-Instruct: Spanish, literary content"
+spec:
+  transformer:
+    containers:
+      - name: auth-transformer
+        image: auth-transformer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        env:
+          - name: MODEL_CLASSIFICATION
+            value: "INTERNAL"
+          - name: PREDICTOR_HOST
+            value: "localhost:8000"
+        envFrom:
+          - configMapRef:
+              name: external-services-config
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
+  predictor:
+    containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args:
+          - "--model=meta-llama/Llama-3.1-8B-Instruct"
+          - "--served-model-name=llama-3-8b-instruct"
+          - "--tensor-parallel-size=1"
+          - "--max-model-len=32768"
+          - "--trust-remote-code"
+          - "--host=0.0.0.0"
+          - "--port=8000"
+          - "--disable-log-requests"
+          - "--gpu-memory-utilization=0.9"
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: huggingface-credentials
+                key: token
+                optional: false  # Required for Llama models
+        resources:
+          requests:
+            cpu: "2"
+            memory: "32Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "8"
+            memory: "64Gi"
+            nvidia.com/gpu: "1"
+        volumeMounts:
+          - name: model-storage
+            mountPath: /root/.cache/huggingface
+          - name: shm
+            mountPath: /dev/shm
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 180
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 120
+          periodSeconds: 10
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: llama-3-8b-instruct-model-storage
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "8Gi"
+    minReplicas: 0
+    maxReplicas: 3
+    scaleTarget: 2
+    scaleMetric: concurrency
+
+---
+# ==============================================================================
+# Mistral-Nemo-12B: French & Long Documents
+# ==============================================================================
+# Best for: French, European languages, 128k context for long documents
+# GPU: 2x A100 (40GB) or 4x A10
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: mistral-nemo-12b
+  namespace: ml-inference
+  labels:
+    app: mistral-nemo-12b
+    app.kubernetes.io/part-of: ml-inference-platform
+    app.kubernetes.io/component: translation-model
+    translation.ml-inference.io/specialization: european
+  annotations:
+    security.ml-inference.io/model-classification: "INTERNAL"
+    serving.kserve.io/enable-streaming: "true"
+    description: "Mistral-Nemo-12B: French, long documents (128k context)"
+spec:
+  transformer:
+    containers:
+      - name: auth-transformer
+        image: auth-transformer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        env:
+          - name: MODEL_CLASSIFICATION
+            value: "INTERNAL"
+          - name: PREDICTOR_HOST
+            value: "localhost:8000"
+        envFrom:
+          - configMapRef:
+              name: external-services-config
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
+  predictor:
+    containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args:
+          - "--model=mistralai/Mistral-Nemo-Instruct-2407"
+          - "--served-model-name=mistral-nemo-12b"
+          - "--tensor-parallel-size=2"
+          - "--max-model-len=131072"  # 128k context
+          - "--trust-remote-code"
+          - "--host=0.0.0.0"
+          - "--port=8000"
+          - "--disable-log-requests"
+          - "--gpu-memory-utilization=0.9"
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: huggingface-credentials
+                key: token
+                optional: true
+          - name: CUDA_VISIBLE_DEVICES
+            value: "0,1"
+        resources:
+          requests:
+            cpu: "4"
+            memory: "64Gi"
+            nvidia.com/gpu: "2"
+          limits:
+            cpu: "8"
+            memory: "128Gi"
+            nvidia.com/gpu: "2"
+        volumeMounts:
+          - name: model-storage
+            mountPath: /root/.cache/huggingface
+          - name: shm
+            mountPath: /dev/shm
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 240
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 180
+          periodSeconds: 10
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: mistral-nemo-12b-model-storage
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "16Gi"
+    minReplicas: 0
+    maxReplicas: 2
+    scaleTarget: 1
+    scaleMetric: concurrency
+
+---
+# ==============================================================================
+# Gemma-X2-28-9B: Arabic Specialist
+# ==============================================================================
+# Best for: Arabic and the 28 most spoken languages
+# GPU: 2x A100 (40GB) or 4x A10
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: gemma-x2-28-9b
+  namespace: ml-inference
+  labels:
+    app: gemma-x2-28-9b
+    app.kubernetes.io/part-of: ml-inference-platform
+    app.kubernetes.io/component: translation-model
+    translation.ml-inference.io/specialization: arabic
+  annotations:
+    security.ml-inference.io/model-classification: "INTERNAL"
+    serving.kserve.io/enable-streaming: "true"
+    description: "Gemma-X2-28-9B: Arabic and 28 most spoken languages"
+spec:
+  transformer:
+    containers:
+      - name: auth-transformer
+        image: auth-transformer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        env:
+          - name: MODEL_CLASSIFICATION
+            value: "INTERNAL"
+          - name: PREDICTOR_HOST
+            value: "localhost:8000"
+        envFrom:
+          - configMapRef:
+              name: external-services-config
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
+  predictor:
+    containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args:
+          - "--model=google/gemma-2-9b-it"  # Base model, customize as needed
+          - "--served-model-name=gemma-x2-28-9b"
+          - "--tensor-parallel-size=2"
+          - "--max-model-len=8192"
+          - "--trust-remote-code"
+          - "--host=0.0.0.0"
+          - "--port=8000"
+          - "--disable-log-requests"
+          - "--gpu-memory-utilization=0.9"
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: huggingface-credentials
+                key: token
+                optional: false  # Required for Gemma models
+          - name: CUDA_VISIBLE_DEVICES
+            value: "0,1"
+        resources:
+          requests:
+            cpu: "4"
+            memory: "48Gi"
+            nvidia.com/gpu: "2"
+          limits:
+            cpu: "8"
+            memory: "96Gi"
+            nvidia.com/gpu: "2"
+        volumeMounts:
+          - name: model-storage
+            mountPath: /root/.cache/huggingface
+          - name: shm
+            mountPath: /dev/shm
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 240
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 180
+          periodSeconds: 10
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: gemma-x2-28-9b-model-storage
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "12Gi"
+    minReplicas: 0
+    maxReplicas: 2
+    scaleTarget: 1
+    scaleMetric: concurrency
+
+---
+# ==============================================================================
+# Qwen2-1.5B-Instruct: Fast/Real-time Translation
+# ==============================================================================
+# Best for: Real-time chat, informal content, low latency
+# GPU: 1x T4 or any small GPU
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: qwen2-1-5b-instruct
+  namespace: ml-inference
+  labels:
+    app: qwen2-1-5b-instruct
+    app.kubernetes.io/part-of: ml-inference-platform
+    app.kubernetes.io/component: translation-model
+    translation.ml-inference.io/specialization: fast
+  annotations:
+    security.ml-inference.io/model-classification: "INTERNAL"
+    serving.kserve.io/enable-streaming: "true"
+    description: "Qwen2-1.5B-Instruct: Fast, real-time translation"
+spec:
+  transformer:
+    containers:
+      - name: auth-transformer
+        image: auth-transformer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        env:
+          - name: MODEL_CLASSIFICATION
+            value: "INTERNAL"
+          - name: PREDICTOR_HOST
+            value: "localhost:8000"
+        envFrom:
+          - configMapRef:
+              name: external-services-config
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+
+  predictor:
+    containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args:
+          - "--model=Qwen/Qwen2-1.5B-Instruct"
+          - "--served-model-name=qwen2-1-5b-instruct"
+          - "--tensor-parallel-size=1"
+          - "--max-model-len=4096"
+          - "--trust-remote-code"
+          - "--host=0.0.0.0"
+          - "--port=8000"
+          - "--disable-log-requests"
+          - "--gpu-memory-utilization=0.9"
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: huggingface-credentials
+                key: token
+                optional: true
+        resources:
+          requests:
+            cpu: "1"
+            memory: "8Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "4"
+            memory: "16Gi"
+            nvidia.com/gpu: "1"
+        volumeMounts:
+          - name: model-storage
+            mountPath: /root/.cache/huggingface
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: qwen2-1-5b-instruct-model-storage
+    minReplicas: 1
+    maxReplicas: 10
+    scaleTarget: 10
+    scaleMetric: concurrency
+
+---
+# ==============================================================================
+# NLLB-200-distilled-1.3B: Technical Documentation
+# ==============================================================================
+# Best for: Technical documentation, API docs, faithful translations
+# GPU: 1x T4 or any small GPU
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: nllb-200-distilled-1b
+  namespace: ml-inference
+  labels:
+    app: nllb-200-distilled-1b
+    app.kubernetes.io/part-of: ml-inference-platform
+    app.kubernetes.io/component: translation-model
+    translation.ml-inference.io/specialization: technical
+  annotations:
+    security.ml-inference.io/model-classification: "INTERNAL"
+    serving.kserve.io/enable-streaming: "true"
+    description: "NLLB-200-distilled-1.3B: Technical documentation"
+spec:
+  transformer:
+    containers:
+      - name: auth-transformer
+        image: auth-transformer:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+        env:
+          - name: MODEL_CLASSIFICATION
+            value: "INTERNAL"
+          - name: PREDICTOR_HOST
+            value: "localhost:8000"
+        envFrom:
+          - configMapRef:
+              name: external-services-config
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+
+  predictor:
+    containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args:
+          - "--model=facebook/nllb-200-distilled-1.3B"
+          - "--served-model-name=nllb-200-distilled-1b"
+          - "--tensor-parallel-size=1"
+          - "--max-model-len=2048"
+          - "--trust-remote-code"
+          - "--host=0.0.0.0"
+          - "--port=8000"
+          - "--disable-log-requests"
+          - "--gpu-memory-utilization=0.9"
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+        env:
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: huggingface-credentials
+                key: token
+                optional: true
+        resources:
+          requests:
+            cpu: "1"
+            memory: "8Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "4"
+            memory: "16Gi"
+            nvidia.com/gpu: "1"
+        volumeMounts:
+          - name: model-storage
+            mountPath: /root/.cache/huggingface
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: nllb-200-distilled-1b-model-storage
+    minReplicas: 1
+    maxReplicas: 5
+    scaleTarget: 5
+    scaleMetric: concurrency

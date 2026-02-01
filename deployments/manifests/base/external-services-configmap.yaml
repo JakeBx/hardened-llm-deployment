@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: external-services-config
+  namespace: ml-inference
+  labels:
+    app.kubernetes.io/part-of: ml-inference-platform
+data:
+  # External service URLs - update these for production
+  ABAC_SERVICE_URL: "http://external-service-stubs.ml-inference.svc.cluster.local:8080"
+  CLASSIFICATION_SERVICE_URL: "http://external-service-stubs.ml-inference.svc.cluster.local:8080"
+  AUDIT_SERVICE_URL: "http://external-service-stubs.ml-inference.svc.cluster.local:8080"
+  OBSERVABILITY_SERVICE_URL: "http://external-service-stubs.ml-inference.svc.cluster.local:8080"

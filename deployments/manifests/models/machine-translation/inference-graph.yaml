@@ -1,0 +1,245 @@
+# ==============================================================================
+# Machine Translation InferenceGraph
+# ==============================================================================
+# This InferenceGraph implements a four-stage translation pipeline:
+# 1. Language Identification (LID) - Detects source language
+# 2. Text Characterization - Analyzes text type
+# 3. Pre-processing - De-noising, sentence splitting
+# 4. Model Selection & Translation - Routes to optimal model
+#
+# The orchestrator handles the entire pipeline logic and routes to specialized
+# translation models based on language and text characteristics.
+# ==============================================================================
+
+apiVersion: serving.kserve.io/v1alpha1
+kind: InferenceGraph
+metadata:
+  name: machine-translation
+  namespace: ml-inference
+  labels:
+    app: machine-translation
+    app.kubernetes.io/part-of: ml-inference-platform
+    app.kubernetes.io/component: inference-graph
+  annotations:
+    # Documentation
+    description: "Multi-model machine translation pipeline with intelligent routing"
+    # Security classification
+    security.ml-inference.io/data-handling: "translation"
+spec:
+  # Entry point for the graph - the orchestrator
+  nodes:
+    # =========================================================================
+    # ROOT NODE: MT Orchestrator
+    # =========================================================================
+    # The orchestrator is the entry point and handles:
+    # - Language detection
+    # - Text characterization
+    # - Pre-processing
+    # - Model routing
+    root:
+      routerType: Sequence
+      steps:
+        - name: orchestrator
+          serviceName: mt-orchestrator
+          # The orchestrator makes the routing decision internally
+          # and calls the appropriate translation model
+
+    # =========================================================================
+    # LANGUAGE IDENTIFICATION NODE
+    # =========================================================================
+    lid:
+      routerType: Sequence
+      steps:
+        - name: fasttext-lid
+          serviceName: lid-fasttext
+
+    # =========================================================================
+    # TRANSLATION MODEL NODES
+    # =========================================================================
+    
+    # Chinese/Japanese/Korean Specialist
+    asian:
+      routerType: Sequence
+      steps:
+        - name: qwen-mt
+          serviceName: qwen-mt-7b
+
+    # Generalist (200+ languages) - Russian, Hindi, Bengali
+    generalist:
+      routerType: Sequence
+      steps:
+        - name: nllb
+          serviceName: nllb-200-3b
+
+    # Spanish / Literary content
+    spanish:
+      routerType: Sequence
+      steps:
+        - name: llama
+          serviceName: llama-3-8b-instruct
+
+    # French / Long documents
+    french:
+      routerType: Sequence
+      steps:
+        - name: mistral
+          serviceName: mistral-nemo-12b
+
+    # Arabic specialist
+    arabic:
+      routerType: Sequence
+      steps:
+        - name: gemma
+          serviceName: gemma-x2-28-9b
+
+    # Fast/Real-time translation
+    fast:
+      routerType: Sequence
+      steps:
+        - name: qwen-fast
+          serviceName: qwen2-1-5b-instruct
+
+    # Technical documentation
+    technical:
+      routerType: Sequence
+      steps:
+        - name: nllb-distilled
+          serviceName: nllb-200-distilled-1b
+
+---
+# ==============================================================================
+# MT Orchestrator InferenceService
+# ==============================================================================
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: mt-orchestrator
+  namespace: ml-inference
+  labels:
+    app: mt-orchestrator
+    app.kubernetes.io/part-of: ml-inference-platform
+    app.kubernetes.io/component: orchestrator
+  annotations:
+    security.ml-inference.io/model-classification: "INTERNAL"
+    serving.kserve.io/enable-streaming: "true"
+spec:
+  predictor:
+    containers:
+      - name: orchestrator
+        image: mt-orchestrator:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+            name: http
+        env:
+          # Service URLs for translation models
+          - name: LID_SERVICE_URL
+            value: "http://lid-fasttext.ml-inference.svc.cluster.local"
+          - name: NLLB_SERVICE_URL
+            value: "http://nllb-200-3b.ml-inference.svc.cluster.local"
+          - name: QWEN_MT_SERVICE_URL
+            value: "http://qwen-mt-7b.ml-inference.svc.cluster.local"
+          - name: LLAMA_SERVICE_URL
+            value: "http://llama-3-8b-instruct.ml-inference.svc.cluster.local"
+          - name: MISTRAL_SERVICE_URL
+            value: "http://mistral-nemo-12b.ml-inference.svc.cluster.local"
+          - name: GEMMA_SERVICE_URL
+            value: "http://gemma-x2-28-9b.ml-inference.svc.cluster.local"
+          - name: QWEN_FAST_SERVICE_URL
+            value: "http://qwen2-1-5b-instruct.ml-inference.svc.cluster.local"
+          - name: NLLB_DISTILLED_SERVICE_URL
+            value: "http://nllb-200-distilled-1b.ml-inference.svc.cluster.local"
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "1Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+    minReplicas: 1
+    maxReplicas: 10
+    scaleTarget: 10
+    scaleMetric: concurrency
+
+---
+# ==============================================================================
+# Language Identification InferenceService (FastText)
+# ==============================================================================
+
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: lid-fasttext
+  namespace: ml-inference
+  labels:
+    app: lid-fasttext
+    app.kubernetes.io/part-of: ml-inference-platform
+    app.kubernetes.io/component: language-detection
+  annotations:
+    security.ml-inference.io/model-classification: "INTERNAL"
+    description: "FastText language identification (200+ languages)"
+spec:
+  predictor:
+    containers:
+      - name: lid
+        image: lid-fasttext:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+          - containerPort: 8080
+            protocol: TCP
+            name: http
+        env:
+          - name: CACHE_DIR
+            value: "/app/models"
+          - name: USE_GLOTLID
+            value: "false"
+          - name: HF_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: huggingface-credentials
+                key: token
+                optional: true
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+        volumeMounts:
+          - name: model-cache
+            mountPath: /app/models
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+    volumes:
+      - name: model-cache
+        persistentVolumeClaim:
+          claimName: lid-fasttext-model-cache
+    minReplicas: 1
+    maxReplicas: 5
+    scaleTarget: 20
+    scaleMetric: concurrency

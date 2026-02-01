@@ -1,0 +1,61 @@
+# ==============================================================================
+# Kustomization for Machine Translation Pipeline
+# ==============================================================================
+# This kustomization deploys the complete machine translation infrastructure:
+# - InferenceGraph for orchestration
+# - MT Orchestrator service
+# - Language Identification (LID) service
+# - 7 specialized translation models
+# ==============================================================================
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: machine-translation
+  namespace: ml-inference
+
+# Labels applied to all resources
+commonLabels:
+  app.kubernetes.io/part-of: ml-inference-platform
+  app.kubernetes.io/component: machine-translation
+
+# Namespace for all resources
+namespace: ml-inference
+
+# Resources to deploy
+resources:
+  # Storage for model caches
+  - pvcs.yaml
+  # InferenceGraph and core services
+  - inference-graph.yaml
+  # Translation models
+  - translation-models.yaml
+
+# Images to use (override for your registry)
+images:
+  - name: mt-orchestrator
+    newName: mt-orchestrator
+    newTag: latest
+  - name: lid-fasttext
+    newName: lid-fasttext
+    newTag: latest
+  - name: auth-transformer
+    newName: auth-transformer
+    newTag: latest
+  - name: vllm/vllm-openai
+    newName: vllm/vllm-openai
+    newTag: latest
+
+# ConfigMap generator for service URLs
+configMapGenerator:
+  - name: mt-service-urls
+    literals:
+      - LID_SERVICE_URL=http://lid-fasttext.ml-inference.svc.cluster.local
+      - NLLB_SERVICE_URL=http://nllb-200-3b.ml-inference.svc.cluster.local
+      - QWEN_MT_SERVICE_URL=http://qwen-mt-7b.ml-inference.svc.cluster.local
+      - LLAMA_SERVICE_URL=http://llama-3-8b-instruct.ml-inference.svc.cluster.local
+      - MISTRAL_SERVICE_URL=http://mistral-nemo-12b.ml-inference.svc.cluster.local
+      - GEMMA_SERVICE_URL=http://gemma-x2-28-9b.ml-inference.svc.cluster.local
+      - QWEN_FAST_SERVICE_URL=http://qwen2-1-5b-instruct.ml-inference.svc.cluster.local
+      - NLLB_DISTILLED_SERVICE_URL=http://nllb-200-distilled-1b.ml-inference.svc.cluster.local

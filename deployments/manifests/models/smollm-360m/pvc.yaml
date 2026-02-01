@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: smollm-360m-model-storage
+  namespace: ml-inference
+  labels:
+    app: smollm-360m
+    app.kubernetes.io/part-of: ml-inference-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      # SmolLM-360M-bnb-4bit is very small (~500MB quantized)
+      storage: 5Gi
