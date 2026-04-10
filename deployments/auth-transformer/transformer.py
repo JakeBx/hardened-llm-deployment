@@ -86,7 +86,7 @@ class EventBus:
         self.audit_url = AUDIT_SERVICE_URL
         self.metrics_url = OBSERVABILITY_SERVICE_URL
     
-    async def emit_audit(self, event: AuditEvent):
+    def emit_audit(self, event: AuditEvent):
         """Fire-and-forget audit event."""
         asyncio.create_task(self._send_audit(event))
     
@@ -100,7 +100,7 @@ class EventBus:
         except Exception as e:
             logger.warning(f"Failed to send audit event: {e}")
     
-    async def emit_metrics(self, metrics: Dict[str, Any]):
+    def emit_metrics(self, metrics: Dict[str, Any]):
         """Fire-and-forget metrics event."""
         asyncio.create_task(self._send_metrics(metrics))
     
