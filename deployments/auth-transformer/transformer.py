@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, Optional
 
 import httpx
@@ -46,11 +47,6 @@ CLASSIFICATION_SERVICE_URL = os.getenv("CLASSIFICATION_SERVICE_URL", "http://cla
 AUDIT_SERVICE_URL = os.getenv("AUDIT_SERVICE_URL", "http://audit-stub:8080")
 OBSERVABILITY_SERVICE_URL = os.getenv("OBSERVABILITY_SERVICE_URL", "http://observability-stub:8080")
 PREDICTOR_HOST = os.getenv("PREDICTOR_HOST", "localhost:8081")
-
-app = FastAPI(title="Auth Transformer (Streaming)", version="2.0.0")
-
-# HTTP client for external services
-http_client: Optional[httpx.AsyncClient] = None
 
 
 class AuthRequest(BaseModel):
@@ -77,18 +73,70 @@ class AuditEvent(BaseModel):
     timestamp: float
 
 
-@app.on_event("startup")
-async def startup():
-    global http_client
+class EventBus:
+    """
+    Centralized event dispatcher for audit and observability.
+    
+    Replaces copy-pasted fire-and-forget patterns with a single
+    event emission interface.
+    """
+    
+    def __init__(self, http_client: httpx.AsyncClient):
+        self.http_client = http_client
+        self.audit_url = AUDIT_SERVICE_URL
+        self.metrics_url = OBSERVABILITY_SERVICE_URL
+    
+    async def emit_audit(self, event: AuditEvent):
+        """Fire-and-forget audit event."""
+        asyncio.create_task(self._send_audit(event))
+    
+    async def _send_audit(self, event: AuditEvent):
+        """Send audit event to audit service."""
+        try:
+            await self.http_client.post(
+                f"{self.audit_url}/audit-events",
+                json=event.model_dump(),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send audit event: {e}")
+    
+    async def emit_metrics(self, metrics: Dict[str, Any]):
+        """Fire-and-forget metrics event."""
+        asyncio.create_task(self._send_metrics(metrics))
+    
+    async def _send_metrics(self, metrics: Dict[str, Any]):
+        """Send metrics to observability service."""
+        try:
+            await self.http_client.post(
+                f"{self.metrics_url}/metrics",
+                json=metrics,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send metrics: {e}")
+
+
+# FastAPI app with lifespan context manager
+app = FastAPI(title="Auth Transformer (Streaming)", version="2.0.0")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifecycle - startup and shutdown."""
+    # Startup: Initialize HTTP client and EventBus
     http_client = httpx.AsyncClient(timeout=30.0)
+    app.state.http_client = http_client
+    app.state.event_bus = EventBus(http_client)
     logger.info(f"Streaming Transformer started with MODEL_CLASSIFICATION={MODEL_CLASSIFICATION}")
+    yield
+    # Shutdown: Clean up resources
+    await http_client.aclose()
 
 
-@app.on_event("shutdown")
-async def shutdown():
-    global http_client
-    if http_client:
-        await http_client.aclose()
+app = FastAPI(
+    title="Auth Transformer (Streaming)",
+    version="2.0.0",
+    lifespan=lifespan
+)
 
 
 @app.get("/health")
@@ -103,7 +151,7 @@ async def ready():
     return {"status": "ready"}
 
 
-async def call_abac_service(user_dn: str, data_classification: str) -> tuple[bool, Optional[str]]:
+async def call_abac_service(http_client: httpx.AsyncClient, user_dn: str, data_classification: str) -> tuple[bool, Optional[str]]:
     """Call the ABAC authorization service"""
     try:
         response = await http_client.post(
@@ -123,7 +171,7 @@ async def call_abac_service(user_dn: str, data_classification: str) -> tuple[boo
         return False, f"ABAC service unavailable: {e}"
 
 
-async def call_classification_service(data_classification: str) -> str:
+async def call_classification_service(http_client: httpx.AsyncClient, data_classification: str) -> str:
     """Call the classification combining service (pre-compute before inference)"""
     try:
         response = await http_client.post(
@@ -142,29 +190,8 @@ async def call_classification_service(data_classification: str) -> str:
         return MODEL_CLASSIFICATION
 
 
-async def send_audit_event(event: AuditEvent):
-    """Send audit event asynchronously (fire and forget)"""
-    try:
-        await http_client.post(
-            f"{AUDIT_SERVICE_URL}/audit-events",
-            json=event.model_dump(),
-        )
-    except Exception as e:
-        logger.warning(f"Failed to send audit event: {e}")
-
-
-async def send_observability_data(metrics: Dict[str, Any]):
-    """Send observability data asynchronously (fire and forget)"""
-    try:
-        await http_client.post(
-            f"{OBSERVABILITY_SERVICE_URL}/metrics",
-            json=metrics,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to send observability data: {e}")
-
-
 async def stream_from_predictor(
+    http_client: httpx.AsyncClient,
     request: Request, 
     body: bytes
 ) -> AsyncGenerator[bytes, None]:
@@ -187,7 +214,7 @@ async def stream_from_predictor(
             yield chunk
 
 
-async def forward_to_predictor_non_streaming(request: Request, body: bytes) -> httpx.Response:
+async def forward_to_predictor_non_streaming(http_client: httpx.AsyncClient, request: Request, body: bytes) -> httpx.Response:
     """Forward the request to the predictor service (non-streaming fallback)"""
     predictor_url = f"http://{PREDICTOR_HOST}{request.url.path}"
     
@@ -235,6 +262,8 @@ async def transform(request: Request, path: str):
     6. After completion, send async audit event
     """
     start_time = time.time()
+    http_client = request.app.state.http_client
+    event_bus = request.app.state.event_bus
     
     # Skip health/ready endpoints
     if path in ("health", "ready"):
@@ -251,8 +280,8 @@ async def transform(request: Request, path: str):
     # This enables streaming by computing classification before inference starts
     # =========================================================================
     
-    abac_task = asyncio.create_task(call_abac_service(user_dn, data_classification))
-    classification_task = asyncio.create_task(call_classification_service(data_classification))
+    abac_task = asyncio.create_task(call_abac_service(http_client, user_dn, data_classification))
+    classification_task = asyncio.create_task(call_classification_service(http_client, data_classification))
     
     # Wait for both to complete
     (authorized, denial_reason), aggregated_classification = await asyncio.gather(
@@ -260,8 +289,8 @@ async def transform(request: Request, path: str):
     )
     
     if not authorized:
-        # Send denial audit event (async)
-        asyncio.create_task(send_audit_event(AuditEvent(
+        # Send denial audit event via EventBus
+        event_bus.emit_audit(AuditEvent(
             event_type="AUTH_DENIED",
             user_dn=user_dn,
             model=MODEL_CLASSIFICATION,
@@ -270,12 +299,12 @@ async def transform(request: Request, path: str):
             authorized=False,
             denial_reason=denial_reason or "ABAC authorization denied",
             timestamp=time.time(),
-        )))
+        ))
         
         raise HTTPException(status_code=403, detail="Authorization denied")
     
-    # Send auth success audit event (async)
-    asyncio.create_task(send_audit_event(AuditEvent(
+    # Send auth success audit event via EventBus
+    event_bus.emit_audit(AuditEvent(
         event_type="AUTH_SUCCESS",
         user_dn=user_dn,
         model=MODEL_CLASSIFICATION,
@@ -284,7 +313,7 @@ async def transform(request: Request, path: str):
         aggregated_classification=aggregated_classification,
         authorized=True,
         timestamp=time.time(),
-    )))
+    ))
     
     logger.info(f"Authorized, aggregated_classification={aggregated_classification}")
     
@@ -310,13 +339,13 @@ async def transform(request: Request, path: str):
             """Wrapper to stream and send audit after completion"""
             token_count = 0
             try:
-                async for chunk in stream_from_predictor(request, body):
+                async for chunk in stream_from_predictor(http_client, request, body):
                     token_count += 1
                     yield chunk
             finally:
-                # After stream completes, send completion audit
+                # After stream completes, send completion audit via EventBus
                 latency_ms = (time.time() - start_time) * 1000
-                asyncio.create_task(send_audit_event(AuditEvent(
+                event_bus.emit_audit(AuditEvent(
                     event_type="INFERENCE_COMPLETE",
                     user_dn=user_dn,
                     model=MODEL_CLASSIFICATION,
@@ -325,15 +354,15 @@ async def transform(request: Request, path: str):
                     aggregated_classification=aggregated_classification,
                     latency_ms=latency_ms,
                     timestamp=time.time(),
-                )))
-                asyncio.create_task(send_observability_data({
+                ))
+                event_bus.emit_metrics({
                     "request_count": 1,
                     "latency_ms": latency_ms,
                     "model_classification": MODEL_CLASSIFICATION,
                     "data_classification": data_classification,
                     "streamed": True,
                     "token_chunks": token_count,
-                }))
+                })
         
         return StreamingResponse(
             stream_with_audit(),
@@ -345,12 +374,12 @@ async def transform(request: Request, path: str):
         # Non-streaming response (fallback for non-LLM models or batch requests)
         logger.info("Using non-streaming response")
         
-        predictor_response = await forward_to_predictor_non_streaming(request, body)
+        predictor_response = await forward_to_predictor_non_streaming(http_client, request, body)
         
-        # Calculate latency and send audit
+        # Calculate latency and send audit via EventBus
         latency_ms = (time.time() - start_time) * 1000
         
-        asyncio.create_task(send_audit_event(AuditEvent(
+        event_bus.emit_audit(AuditEvent(
             event_type="INFERENCE_COMPLETE",
             user_dn=user_dn,
             model=MODEL_CLASSIFICATION,
@@ -359,15 +388,15 @@ async def transform(request: Request, path: str):
             aggregated_classification=aggregated_classification,
             latency_ms=latency_ms,
             timestamp=time.time(),
-        )))
+        ))
         
-        asyncio.create_task(send_observability_data({
+        event_bus.emit_metrics({
             "request_count": 1,
             "latency_ms": latency_ms,
             "model_classification": MODEL_CLASSIFICATION,
             "data_classification": data_classification,
             "streamed": False,
-        }))
+        })
         
         # Merge response headers
         final_headers = dict(predictor_response.headers)

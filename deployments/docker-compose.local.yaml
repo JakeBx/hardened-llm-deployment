@@ -1,5 +1,5 @@
 # =============================================================================
-# Full Stack Local Testing for SmolLM-360M (Option 3)
+# Full Stack Local Testing for SmolLM2-135M (Option 3)
 # =============================================================================
 #
 # This docker-compose file sets up the complete auth transformer + inference stack
@@ -7,15 +7,18 @@
 # Audit, and Observability services.
 #
 # Architecture:
-#   Client -> Auth Transformer (8080) -> vLLM/Mock (8000)
+#   Client -> Auth Transformer (8080) -> SmolLM2 Server (8000)
 #                    |
 #                    +-> External Stubs (8081) [ABAC, Classification, Audit, Observability]
 #
-# PROFILES:
-#   - Default (no profile): Uses mock-vllm for CPU-only testing (no GPU required)
-#   - GPU profile: Uses real vLLM with GPU support
+# The default configuration uses the HuggingFace SmolLM2-135M model with
+# transformers for CPU-friendly inference (no GPU required).
 #
-# Usage (Mock vLLM - no GPU required):
+# PROFILES:
+#   - Default (no profile): Uses SmolLM2-135M with HuggingFace transformers
+#   - GPU profile: Uses real vLLM with GPU support (for larger models)
+#
+# Usage (SmolLM2-135M - no GPU required):
 #   cd deployments
 #   docker compose -f docker-compose.local.yaml build
 #   docker compose -f docker-compose.local.yaml up -d
@@ -26,7 +29,7 @@
 #
 # Test:
 #   curl http://localhost:8080/health  # Auth transformer
-#   curl http://localhost:8000/health  # vLLM/Mock direct
+#   curl http://localhost:8000/health  # SmolLM2 server direct
 #   curl http://localhost:8081/health  # External stubs
 #
 # =============================================================================
@@ -121,16 +124,18 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # Mock vLLM Server (Default - No GPU Required)
+  # SmolLM2-135M Server (Default - No GPU Required)
   # ===========================================================================
-  # A lightweight mock that implements the OpenAI-compatible API.
-  # Perfect for testing the auth transformer pipeline without GPU.
+  # Uses HuggingFace SmolLM2-135M-Instruct model for real inference.
+  # Small enough to run efficiently on CPU for local development.
   #
-  # Returns pre-canned but realistic responses for:
+  # Implements OpenAI-compatible API:
   #   - GET /health
   #   - GET /v1/models
   #   - POST /v1/chat/completions (streaming and non-streaming)
   #   - POST /v1/completions
+  #
+  # Model is downloaded from HuggingFace on first run (~270MB).
   # ===========================================================================
   vllm:
     build:
@@ -139,15 +144,19 @@ services:
     container_name: smollm-vllm
     ports:
       - "8000:8000"
+    volumes:
+      - ${HOME}/.cache/huggingface:/app/.cache/huggingface
     environment:
-      - MODEL_NAME=smollm-360m
-      - RESPONSE_DELAY_MS=50
+      - MODEL_NAME=HuggingFaceTB/SmolLM2-135M-Instruct
+      - DEVICE=cpu
+      - MAX_MODEL_LENGTH=2048
+      - RESPONSE_DELAY_MS=10
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
     networks:
       - smollm-network
     restart: unless-stopped
