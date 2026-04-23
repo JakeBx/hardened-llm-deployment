@@ -115,10 +115,6 @@ class EventBus:
             logger.warning(f"Failed to send metrics: {e}")
 
 
-# FastAPI app with lifespan context manager
-app = FastAPI(title="Auth Transformer (Streaming)", version="2.0.0")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifecycle - startup and shutdown."""
